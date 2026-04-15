@@ -1,0 +1,642 @@
+ PREPARAÇÃO
+
+rm(list= ls()) # limpa a memória
+
+memory.limit(999999999999)
+
+if (!require(pacman))
+  install.packages("pacman")
+
+require(pacman)
+
+p_load(data.table,
+       dplyr,
+       stringr,
+       forcats)
+
+
+setwd('C:/Users/super/Desktop/pbh/novo_caged/')
+
+
+
+#             IMPORTACAO CAGED 2020
+
+# importa o nome dos arquivos
+for (i in 1:2) {
+  list_arc <- list.files(pattern = ".txt")
+}
+
+# converte os arquivos de .txt para .rds (if true)
+if(length(list_arc) != 0){
+  
+  for (i in list_arc) {
+    
+    dados <- fread(i,
+                   stringsAsFactors = TRUE,
+                   encoding = "UTF-8")
+    
+    saveRDS(
+      dados,
+      paste(
+        gsub(".txt", "", i),
+        ".rds",
+        sep = ""
+      )
+    )
+    
+    if (file.exists(i)) {
+      file.remove(i)
+    }
+    
+  }
+  
+  rm(dados, i)
+  
+}
+
+rm(list_arc, i)
+
+############################################################
+# IMPORTAÇÃO, LIMPEZA E AGREGAÇÃO DE BASES
+
+#____________________________
+#               [CAGED MOVIMENTAÇÕES]
+
+setwd('C:/Users/super/Desktop/pbh/novo_caged/')
+
+
+for (i in 1:2) {
+  list_arc <- list.files(
+    pattern = "CAGEDMOV")
+}
+
+caged.mov <- list()
+
+for (i in list_arc) {
+  
+  data <- readRDS(i) %>% 
+    filter(uf == 31) %>% 
+    select(-competênciadec) %>% 
+    mutate(admissoes = ifelse(saldomovimentação == 1, 1, 0),
+           desligamentos = ifelse(saldomovimentação == -1, 1, 0))
+  
+  caged.mov[[i]] <- data
+  
+}
+
+caged.mov <- rbindlist(caged.mov, fill = TRUE)
+
+#____________________________
+#               [CAGED FORA DO PRAZO]
+
+for (i in 1:2) {
+  list_arc <- list.files(
+    pattern = "CAGEDFOR")
+}
+
+caged.for <- list()
+
+for (i in list_arc) {
+  
+  data <- readRDS(i) %>% 
+    filter(uf == 31) %>% 
+    select(-competênciadec) %>% 
+    mutate(admissoes = ifelse(saldomovimentação == 1, 1, 0),
+           desligamentos = ifelse(saldomovimentação == -1, 1, 0))
+  
+  
+  caged.for[[i]] <- data
+  
+}
+
+caged.for <- rbindlist(caged.for, fill = TRUE)
+
+#____________________________
+#               [CAGED EXCLUSÕES]
+
+for (i in 1:2) {
+  list_arc <- list.files(
+    pattern = "CAGEDEXC")
+}
+
+caged.ex <- list()
+
+for (i in list_arc) {
+  
+  data <- readRDS(i) %>% 
+    filter(uf == 31) %>% 
+    select(-c(indicadordeexclusão, competênciaexc,
+              competênciadec)) %>% 
+    mutate(admissoes = ifelse(saldomovimentação == 1, -1, 0),
+           desligamentos = ifelse(saldomovimentação == -1, -1, 0),
+           saldomovimentação = ifelse(saldomovimentação == 1, -1, 1))
+  
+  caged.ex[[i]] <- data
+  
+}
+
+caged.ex <- rbindlist(caged.ex,
+                      fill = TRUE)
+
+rm(data, i, list_arc)
+
+#____________________________
+#               [UNIFICAÇÃO]
+
+caged <- do.call("rbind", list(caged.mov,
+                               caged.for,
+                               caged.ex))
+
+rm(caged.ex,
+   caged.mov,
+   caged.for)
+
+caged <- caged %>% 
+  rename('competência' = 'competênciamov',
+         'fonte' = 'origemdainformação') %>% 
+  as.data.frame()
+
+# ---------------------------------------------------------
+
+# Seleciona as variáveis de interesse e descarta
+# as demais
+caged <- caged[, c(
+  "categoria",
+  "cbo2002ocupação",
+  "competência",
+  "fonte",
+  "graudeinstrução",
+  "horascontratuais",
+  "idade",
+  "indicadoraprendiz",
+  "indtrabintermitente",
+  "indtrabparcial",
+  "município",
+  "raçacor",
+  "salário",
+  "saldomovimentação",
+  "sexo",
+  "subclasse",
+  "tipodedeficiência",
+  "tipoestabelecimento",
+  "tipomovimentação",
+  "uf",
+  "admissoes",
+  "desligamentos"
+)]
+
+#                      CNAE
+
+### Os procedimentos abaixo visam preparar a variável
+### "subclasse" para servir de chave para o merge
+### com a planilha CNAE
+{
+  # Converte o objeto para a classe "data.frame"
+  caged <- as.data.frame(caged)
+  
+  # Converte a variável para a classe 'character'
+  caged[, "subclasse"] <- as.character(caged[, "subclasse"])
+  
+  # Adiciona um "0" a esquerda em todas as
+  # observações com 6 dígitos. Este procedimento
+  # é necessário pois, ao importar os dados, o R
+  # interpreta os códigos da subclasse CNAE como
+  # sendo da classe "númeric", o que  provoca a
+  # eliminação dos zeros à esquerda
+  caged[, "subclasse"] <-
+    ifelse(str_count(caged[, "subclasse"]) == 6,
+           paste(0, caged[, "subclasse"], sep = ""),
+           caged[, "subclasse"])
+  
+}
+
+# Importa a planilha de conversão da CNAE versão 2.0,
+# 2.1 e 2.2 para a 2.3
+cnae_convert <-
+  data.frame(
+    fread(
+      "C:/Users/super/Desktop/pbh/bases/Transição CNAE.txt",
+      stringsAsFactors = TRUE
+    )
+  )
+
+# Elimina todas as ocorrências de "/"
+cnae_convert$CNAE_2.0 <- gsub("/", "", cnae_convert$CNAE_2.0)
+cnae_convert$CNAE_2.1 <- gsub("/", "", cnae_convert$CNAE_2.1)
+cnae_convert$CNAE_2.2 <- gsub("/", "", cnae_convert$CNAE_2.2)
+cnae_convert$CNAE_2.3 <- gsub("/", "", cnae_convert$CNAE_2.3)
+
+# Elimina todas as ocorrências de "-"
+cnae_convert$CNAE_2.0 <- gsub("-", "", cnae_convert$CNAE_2.0)
+cnae_convert$CNAE_2.1 <- gsub("-", "", cnae_convert$CNAE_2.1)
+cnae_convert$CNAE_2.2 <- gsub("-", "", cnae_convert$CNAE_2.2)
+cnae_convert$CNAE_2.3 <- gsub("-", "", cnae_convert$CNAE_2.3)
+
+# Insere uma coluna chamada "CNAE_2.0", com os códigos
+# correspondentes da CNAE versão 2.3
+caged <-
+  merge(
+    caged,
+    select(cnae_convert, CNAE_2.0,
+           CNAE_2.3),
+    by.x = c("subclasse"),
+    by.y = c("CNAE_2.0"),
+    all.x = TRUE
+  )
+
+# Remove objetos
+rm(cnae_convert)
+
+# Substitui os códigos antigos da CNAE 2.0 pelos
+# respectivos códigos da CNAE 2.3
+caged$subclasse <-
+  ifelse(is.na(caged[, length(caged)]),
+         caged$subclasse, caged[, length(caged)])
+
+# Substitui as do código 8630505 pelo 8630504.
+# Esta alteração foi realizada manualmente, pois
+# não consta o código 8630505 em nenhuma das versões
+# CNAE 2.0, 2.1, 2.2 ou 2.3, apesar de haver
+# ocorrência dele no Novo CAGED
+caged$subclasse <-
+  gsub("8630505",
+       "8630504",
+       caged$subclasse)
+
+# Elimina variável do conjunto de dados
+caged[, length(caged)] <- NULL
+
+# Importa a planilha com as demais hierarquias CNAE
+cnae <-
+  fread(
+    "C:/Users/super/Desktop/pbh/bases/cnae_2.3.txt",
+    stringsAsFactors = TRUE
+  )
+
+# Elimina variáveis desnecessárias
+cnae$ordem <- NULL
+cnae$denominação <- NULL
+cnae$V8 <- NULL
+
+# Elimina todas as linhas com observações vazias na
+# variável 'subclasse''
+cnae <- filter(cnae, subclasse != "")
+
+# Elimina todas as ocorrências de "-" e "/" nas variáveis
+# 'subclasse'
+cnae$subclasse <- gsub("-", "", cnae$subclasse)
+cnae$subclasse <- gsub("/", "", cnae$subclasse)
+
+# Converte a classe da variável para "character"
+cnae$subclasse <- as.character(cnae$subclasse)
+
+# Insere as observações do conjunto de dados "cnae" no
+# conjunto de dados "caged", conforme correspondência
+# da variável "subclasse", comum aos dois conjuntos de
+# dados
+
+caged <-
+  left_join(caged, cnae, by = "subclasse")
+
+# Remove objetos
+rm(cnae)
+
+#                      CRIAÇÃO DE NOVAS VARIÁVEIS
+
+## Variáveis complementares
+{
+  # Cria uma variável chamada "Grande Grupamento" a partir
+  # da observações da variável "Seção".
+  caged[, "Grande Grupamento"] <-
+    ifelse(caged[, "seção"] == "A",
+           "Agropecuária",
+           ifelse(
+             caged[, "seção"] == "B",
+             "Indústria",
+             ifelse(
+               caged[, "seção"] == "C",
+               "Indústria",
+               ifelse(
+                 caged[, "seção"] == "D",
+                 "Indústria",
+                 ifelse(
+                   caged[, "seção"] == "E",
+                   "Indústria",
+                   ifelse(
+                     caged[, "seção"] == "F",
+                     "Construção",
+                     ifelse(
+                       caged[, "seção"] == "G",
+                       "Comércio",
+                       ifelse(
+                         caged[, "seção"] == "H",
+                         "Serviços",
+                         ifelse(
+                           caged[, "seção"] == "I",
+                           "Serviços",
+                           ifelse(
+                             caged[, "seção"] == "J",
+                             "Serviços",
+                             ifelse(
+                               caged[, "seção"] == "K",
+                               "Serviços",
+                               ifelse(
+                                 caged[, "seção"] == "L",
+                                 "Serviços",
+                                 ifelse(
+                                   caged[, "seção"] == "M",
+                                   "Serviços",
+                                   ifelse(
+                                     caged[, "seção"] == "N",
+                                     "Serviços",
+                                     ifelse(
+                                       caged[, "seção"] == "O",
+                                       "Serviços",
+                                       ifelse(
+                                         caged[, "seção"] == "P",
+                                         "Serviços",
+                                         ifelse(
+                                           caged[, "seção"] == "Q",
+                                           "Serviços",
+                                           ifelse(
+                                             caged[, "seção"] == "R",
+                                             "Serviços",
+                                             ifelse(
+                                               caged[, "seção"] == "S",
+                                               "Serviços",
+                                               ifelse(
+                                                 caged[, "seção"] == "T",
+                                                 "Serviços",
+                                                 ifelse(caged[, "seção"] == "U", "Serviços",
+                                                        "Não identificado")
+                                               )
+                                             )
+                                           )
+                                         )
+                                       )
+                                     )
+                                   )
+                                 )
+                               )
+                             )
+                           )
+                         )
+                       )
+                     )
+                   )
+                 )
+               )
+             )
+           ))
+  
+  # Cria variável de faixa etária a partir da
+  # variável "idade"
+  caged[, "Faixa Etária"] <-
+    ifelse(
+      caged[, "idade"] >= 10 & caged[, "idade"] <= 14,
+      "01",
+      ifelse(
+        caged[, "idade"] >= 15 &
+          caged[, "idade"] <= 17,
+        "02",
+        ifelse(
+          caged[, "idade"] >= 18 & caged[, "idade"] <= 24,
+          "03",
+          ifelse(
+            caged[, "idade"] >= 25 &
+              caged[, "idade"] <= 29,
+            "04",
+            ifelse(
+              caged[, "idade"] >= 30 & caged[, "idade"] <= 39,
+              "05",
+              ifelse(
+                caged[, "idade"] >= 40 &
+                  caged[, "idade"] <= 49,
+                "06",
+                ifelse(
+                  caged[, "idade"] >= 50 & caged[, "idade"] <= 64,
+                  "07",
+                  ifelse(caged[, "idade"] >= 65, "08",
+                         "00")
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  
+  # Cria nova variável
+  caged[, "Versão CAGED"] <- "Novo CAGED"
+}
+
+## Variáveis de integração. São aquelas criadas ou
+## modificadas visando a integração entre as duas
+## versões do CAGED (Antigo e Novo)
+{
+  # Cria nova variável preenchida integralmente com 99
+  caged[, "Faixa Empr Início Jan"] <- 99
+  
+  # Cria nova variável preenchida integralmente com 26
+  caged[, "IBGE Subsetor"] <- 26
+  
+  # Cria nova variável preenchida integralmente com NA
+  caged[, "Tempo Emprego"] <- NA
+  
+  # Cria a variável "Ind Portador Defic", preenchida
+  # conforme as observações as observações das
+  # variáveis "tipodedeficiência" e "tipodedeficiência"
+  caged[, "Ind Portador Defic"] <-
+    ifelse(caged[, "tipodedeficiência"] == 0, 0,
+           ifelse(caged[, "tipodedeficiência"] == 9, 9,
+                  1))
+  
+  
+  # Converte a variável para factor
+  caged[, "sexo"] <- as.factor(caged[, "sexo"])
+  
+  # Substitui toda ocorrência de 3, por 2
+  caged[, "sexo"] <- fct_collapse(caged[, "sexo"],
+                                  "2" = "3")
+  
+  # Converte a variável para factor
+  caged[, "tipoestabelecimento"] <-
+    as.factor(caged[, "tipoestabelecimento"])
+  
+  # Substitui toda ocorrência de 5, por 3 e toda
+  # ocorrência de 3, por 5
+  caged[, "tipoestabelecimento"] <-
+    fct_collapse(caged[, "tipoestabelecimento"],
+                 "3" = "5",
+                 "5" = "3")
+  
+  
+  # Converte a variável para factor
+  caged[, "tipomovimentação"] <-
+    as.factor(caged[, "tipomovimentação"])
+  
+  # Substitui toda ocorrência de 10 por 1 ...
+  caged[, "tipomovimentação"] <- fct_collapse(
+    caged[, "tipomovimentação"],
+    "1" = "10",
+    "2" = "20",
+    "4" = "31",
+    "5" = "32",
+    "10" = "35",
+    "6" = "40",
+    "11" = "45",
+    "7" = "50",
+    "8" = "60",
+    "3" = "70",
+    "9" = "80"
+  )
+  
+  # Converte a variável para factor
+  caged[, "raçacor"] <- as.factor(caged[, "raçacor"])
+  
+  # Substitui toda ocorrência de 1, por 2 ...
+  caged[, "raçacor"] <- fct_collapse(
+    caged[, "raçacor"],
+    "2" = "1",
+    "4" = "2",
+    "8" = "3",
+    "6" = "4",
+    "1" = "5",
+    "7" = "6"
+  )
+  
+}
+
+#                      EXPORTAÇÃO
+
+# Armazena os nomes atuais de todas as variáveis
+# do conjunto de dados
+old_nam <- c(
+  "categoria",
+  "cbo2002ocupação",
+  "classe",
+  "divisão",
+  "grupo",
+  "seção",
+  "subclasse",
+  "competência",
+  "Faixa Empr Início Jan",
+  "fonte",
+  "graudeinstrução",
+  "IBGE Subsetor",
+  "idade",
+  "indicadoraprendiz",
+  "Ind Portador Defic",
+  "indtrabintermitente",
+  "indtrabparcial",
+  "município",
+  "horascontratuais",
+  "raçacor",
+  "salário",
+  "saldomovimentação",
+  "sexo",
+  "Tempo Emprego",
+  "tipodedeficiência",
+  "tipoestabelecimento",
+  "tipomovimentação",
+  "uf",
+  "Faixa Etária",
+  "Versão CAGED",
+  "Grande Grupamento",
+  "admissoes",
+  "desligamentos"
+)
+
+# Armazena os novos nomes para todas as variáveis
+# do conjunto de dados
+new_nam <- c(
+  "Categoria do Trabalhador",
+  "CBO 2002 Ocupação",
+  "CNAE 2.0 Classe",
+  "CNAE 2.0 Divisão",
+  "CNAE 2.0 Grupo",
+  "CNAE 2.0 Seção",
+  "CNAE 2.0 Subclas",
+  "Competência Declarada",
+  "Faixa Empr Início Jan",
+  "Fonte do movimento",
+  "Grau Instrução",
+  "IBGE Subsetor",
+  "Idade",
+  "Ind Aprendiz",
+  "Ind Portador Defic",
+  "Ind Trab Intermitente",
+  "Ind Trab Parcial",
+  "Município",
+  "Qtd Hora Contrat",
+  "Raça Cor",
+  "Salário Mensal",
+  "Saldo Mov",
+  "Sexo",
+  "Tempo Emprego",
+  "Tipo Defic",
+  "Tipo Estab",
+  "Tipo Mov Desagregado",
+  "UF",
+  "Faixa Etária",
+  "Versão CAGED",
+  "Grande Grupamento",
+  "admissoes",
+  "desligamentos"
+)
+
+# Substitui todos os nomes antigos pelos novos,
+# conforme posição de cada vetor
+setnames(caged,
+         old = old_nam,
+         new = new_nam)
+
+# Remove objetos
+rm(new_nam, old_nam)
+
+# Reordena as variáveis no objeto caged
+caged <- select(
+  caged,
+  "Competência Declarada",
+  "Município",
+  "CBO 2002 Ocupação",
+  "CNAE 2.0 Seção",
+  "CNAE 2.0 Divisão",
+  "CNAE 2.0 Grupo",
+  "CNAE 2.0 Classe",
+  "CNAE 2.0 Subclas",
+  "Faixa Empr Início Jan",
+  "Grau Instrução",
+  "Qtd Hora Contrat",
+  "IBGE Subsetor",
+  "Idade",
+  "Ind Aprendiz",
+  "Ind Portador Defic",
+  "Raça Cor",
+  "Salário Mensal",
+  "Saldo Mov",
+  "Sexo",
+  "Tempo Emprego",
+  "Tipo Estab",
+  "Tipo Defic",
+  "Tipo Mov Desagregado",
+  "UF",
+  "Ind Trab Parcial",
+  "Ind Trab Intermitente",
+  "Categoria do Trabalhador",
+  "Fonte do movimento",
+  "Faixa Etária",
+  "Versão CAGED",
+  "Grande Grupamento",
+  "admissoes",
+  "desligamentos"
+)
+
+# Exporta o conjunto de dados tratado para o endereço
+# especificado abaixo, substituindo o arquivo de mesmo
+# nome caso exista
+write.table(
+  caged,
+  "C:/Users/super/Desktop/pbh/CAGED_UNIFICADO_2020_2023.txt",
+  row.names = FALSE
+)
